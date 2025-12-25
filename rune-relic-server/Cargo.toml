@@ -48,6 +48,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Hex encoding for logging
 hex = "0.4"
 
+# JWT authentication
+jsonwebtoken = "9.3"
+
 [dev-dependencies]
 # Testing
 criterion = "0.5"

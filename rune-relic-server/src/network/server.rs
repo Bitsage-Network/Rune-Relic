@@ -16,6 +16,7 @@ use tracing::{info, warn, error, debug, instrument};
 
 use crate::game::state::PlayerId;
 use crate::game::events::{GameEvent, GameEventData};
+use crate::network::auth::{AuthConfig, validate_token, AuthError};
 use crate::network::protocol::{
     ClientMessage, ServerMessage, AuthRequest, AuthResult, MatchmakingRequest,
     MatchmakingResponse, MatchmakingStatus, GameInput, MatchFoundInfo,
@@ -92,6 +93,8 @@ pub struct ServerConfig {
     pub enable_ranked: bool,
     /// Server version string.
     pub version: String,
+    /// Authentication configuration.
+    pub auth: AuthConfig,
 }
 
 impl Default for ServerConfig {
@@ -103,6 +106,7 @@ impl Default for ServerConfig {
             tick_rate: 60,
             enable_ranked: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            auth: AuthConfig::from_env(),
         }
     }
 }
@@ -144,10 +148,15 @@ struct ConnectedClient {
     connected_at: Instant,
     /// Last activity.
     last_activity: Instant,
+    /// Last input time (for rate limiting).
+    last_input_time: Option<Instant>,
     /// Message sender (for direct messaging to client).
     #[allow(dead_code)]
     sender: mpsc::Sender<ServerMessage>,
 }
+
+/// Minimum interval between inputs (~60 Hz).
+const MIN_INPUT_INTERVAL: Duration = Duration::from_micros(16_667);
 
 /// Matchmaking queue entry.
 struct QueueEntry {
@@ -273,6 +282,7 @@ impl GameServer {
                     authenticated: false,
                     connected_at: Instant::now(),
                     last_activity: Instant::now(),
+                    last_input_time: None,
                     sender: msg_tx.clone(),
                 });
             }
@@ -455,24 +465,63 @@ impl GameServer {
         config: &ServerConfig,
         sender: &mpsc::Sender<ServerMessage>,
     ) {
-        // TODO: Implement proper authentication
-        // For now, accept any valid player ID
-        let player_id = PlayerId::new(auth.player_id);
+        // Determine player ID based on auth method
+        let player_id = if config.auth.is_configured() {
+            // JWT authentication mode
+            match validate_token(&auth.token, &config.auth) {
+                Ok(claims) => {
+                    debug!("JWT validated for subject: {}", claims.sub);
+                    claims.player_id()
+                }
+                Err(e) => {
+                    let (_code, message) = match e {
+                        AuthError::Expired => (ErrorCode::TokenExpired, "Token expired"),
+                        AuthError::InvalidSignature => (ErrorCode::InvalidToken, "Invalid token signature"),
+                        AuthError::InvalidIssuer => (ErrorCode::InvalidToken, "Invalid token issuer"),
+                        AuthError::InvalidAudience => (ErrorCode::InvalidToken, "Invalid token audience"),
+                        AuthError::InvalidFormat => (ErrorCode::InvalidToken, "Invalid token format"),
+                        AuthError::MissingClaim(ref c) => {
+                            warn!("Missing claim in token: {}", c);
+                            (ErrorCode::InvalidToken, "Missing required claim")
+                        }
+                        AuthError::NotConfigured => (ErrorCode::InternalError, "Auth not configured"),
+                        AuthError::DecodeError(_) => (ErrorCode::InvalidToken, "Token decode failed"),
+                    };
 
-        let mut clients = clients.write().await;
-        if let Some(client) = clients.get_mut(&addr) {
-            client.player_id = Some(player_id);
-            client.authenticated = true;
+                    let _ = sender.send(ServerMessage::AuthResult(AuthResult {
+                        success: false,
+                        session_id: None,
+                        error: Some(message.to_string()),
+                        server_version: config.version.clone(),
+                    })).await;
+
+                    warn!("Auth failed for {}: {:?}", addr, e);
+                    return;
+                }
+            }
+        } else {
+            // Legacy mode: accept player_id from request (for development/testing)
+            debug!("Auth not configured, using legacy player_id mode");
+            PlayerId::new(auth.player_id)
+        };
+
+        // Update client state
+        {
+            let mut clients = clients.write().await;
+            if let Some(client) = clients.get_mut(&addr) {
+                client.player_id = Some(player_id);
+                client.authenticated = true;
+            }
         }
 
         let _ = sender.send(ServerMessage::AuthResult(AuthResult {
             success: true,
-            session_id: Some(hex::encode(&auth.player_id[..8])),
+            session_id: Some(hex::encode(&player_id.as_bytes()[..8])),
             error: None,
             server_version: config.version.clone(),
         })).await;
 
-        debug!("Client {} authenticated as {:?}", addr, &auth.player_id[..4]);
+        debug!("Client {} authenticated as {:?}", addr, &player_id.as_bytes()[..4]);
     }
 
     /// Handle matchmaking request.
@@ -568,10 +617,22 @@ impl GameServer {
         sessions: &Arc<SessionManager>,
         sender: &mpsc::Sender<ServerMessage>,
     ) {
+        let now = Instant::now();
+
+        // Rate limit check and extract player/session info
         let (player_id, session_id) = {
-            let clients = clients.read().await;
-            match clients.get(&addr) {
-                Some(c) => (c.player_id, c.session_id),
+            let mut clients = clients.write().await;
+            match clients.get_mut(&addr) {
+                Some(c) => {
+                    // Check rate limit
+                    if let Some(last_time) = c.last_input_time {
+                        if now.duration_since(last_time) < MIN_INPUT_INTERVAL {
+                            return; // Silent drop - too fast
+                        }
+                    }
+                    c.last_input_time = Some(now);
+                    (c.player_id, c.session_id)
+                }
                 None => return,
             }
         };
@@ -589,9 +650,18 @@ impl GameServer {
         if let Some(session) = sessions.get_session(&session_id).await {
             let (process_result, server_tick) = {
                 let mut session_guard = session.write().await;
+
+                // Additional validation: reject inputs for invalid ticks
+                let current_tick = session_guard.current_tick();
+                if input.tick > current_tick + 5 {
+                    return; // Future tick - reject
+                }
+                if current_tick > 60 && input.tick < current_tick - 60 {
+                    return; // Too old - reject
+                }
+
                 let result = session_guard.process_input(&player_id, input.tick, input.to_input_frame());
-                let tick = session_guard.current_tick();
-                (result, tick)
+                (result, current_tick)
             };
 
             // Send input acknowledgment
@@ -796,10 +866,13 @@ impl GameServer {
         let mut tick_interval = interval(tick_duration);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // State update throttling: send every 3rd tick (60Hz -> 20Hz)
+        const STATE_UPDATE_INTERVAL: u32 = 3;
+
         loop {
             tick_interval.tick().await;
 
-            let (match_ended, state_update, events) = {
+            let (match_ended, current_tick, state_update, events) = {
                 let mut s = session.write().await;
 
                 // Check if session is still in playing state
@@ -815,14 +888,19 @@ impl GameServer {
 
                 let match_ended = tick_result.match_ended;
                 let events = tick_result.events.clone();
+                let current_tick = s.current_tick();
 
-                // Generate state update
-                let state_update = s.generate_state_update();
+                // Generate state update (only on throttled interval)
+                let state_update = if current_tick % STATE_UPDATE_INTERVAL == 0 {
+                    s.generate_state_update()
+                } else {
+                    None
+                };
 
-                (match_ended, state_update, events)
+                (match_ended, current_tick, state_update, events)
             };
 
-            // Broadcast events
+            // Broadcast events (always, regardless of throttling)
             {
                 let s = session.read().await;
                 for event in events {
@@ -831,7 +909,7 @@ impl GameServer {
                 }
             }
 
-            // Broadcast state update (every tick or every N ticks for bandwidth)
+            // Broadcast state update (throttled to 20Hz for bandwidth)
             if let Some(update) = state_update {
                 let s = session.read().await;
                 s.broadcast(ServerMessage::State(update)).await;
@@ -839,6 +917,7 @@ impl GameServer {
 
             // Check if match ended
             if match_ended {
+                info!("Match ended at tick {}", current_tick);
                 break;
             }
         }

@@ -37,6 +37,18 @@ pub enum SessionState {
     Closed,
 }
 
+/// Connection state for reconnection support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// Player is connected.
+    Connected,
+    /// Player disconnected, waiting for reconnect.
+    Disconnected {
+        /// When disconnection occurred.
+        since_tick: u32,
+    },
+}
+
 /// Configuration for a match session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -54,6 +66,8 @@ pub struct SessionConfig {
     pub mode: MatchMode,
     /// Generate proof transcript.
     pub generate_proof: bool,
+    /// Reconnect timeout in ticks (30 seconds at 60Hz = 1800 ticks).
+    pub reconnect_timeout_ticks: u32,
 }
 
 impl Default for SessionConfig {
@@ -66,6 +80,7 @@ impl Default for SessionConfig {
             match_duration_ticks: 5400, // 90 seconds @ 60Hz
             mode: MatchMode::Casual,
             generate_proof: false,
+            reconnect_timeout_ticks: 1800, // 30 seconds @ 60Hz
         }
     }
 }
@@ -77,8 +92,8 @@ pub struct SessionPlayer {
     pub player_id: PlayerId,
     /// Is player ready to start.
     pub ready: bool,
-    /// Is player connected.
-    pub connected: bool,
+    /// Connection state (for reconnection support).
+    pub connection_state: ConnectionState,
     /// Last input received.
     pub last_input: InputFrame,
     /// Last input tick.
@@ -87,6 +102,13 @@ pub struct SessionPlayer {
     pub rtt_ms: u32,
     /// Message channel to this player.
     pub sender: mpsc::Sender<ServerMessage>,
+}
+
+impl SessionPlayer {
+    /// Check if player is connected.
+    pub fn is_connected(&self) -> bool {
+        matches!(self.connection_state, ConnectionState::Connected)
+    }
 }
 
 /// A match session.
@@ -158,7 +180,7 @@ impl MatchSession {
         self.players.insert(player_id, SessionPlayer {
             player_id,
             ready: false,
-            connected: true,
+            connection_state: ConnectionState::Connected,
             last_input: InputFrame::new(),
             last_input_tick: 0,
             rtt_ms: 0,
@@ -181,6 +203,90 @@ impl MatchSession {
         }
     }
 
+    /// Mark a player as disconnected (for reconnection support).
+    /// Returns true if player was found and marked.
+    pub fn mark_disconnected(&mut self, player_id: &PlayerId) -> bool {
+        if let Some(player) = self.players.get_mut(player_id) {
+            let current_tick = self.game_state.as_ref().map(|s| s.tick).unwrap_or(0);
+            player.connection_state = ConnectionState::Disconnected { since_tick: current_tick };
+            // Reset input to neutral
+            player.last_input = InputFrame::new();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reconnect a player with a new sender channel.
+    /// Returns Some(current_tick) if reconnected, None if player not found or timed out.
+    pub fn reconnect_player(
+        &mut self,
+        player_id: &PlayerId,
+        sender: mpsc::Sender<ServerMessage>,
+    ) -> Option<u32> {
+        let current_tick = self.game_state.as_ref().map(|s| s.tick).unwrap_or(0);
+
+        if let Some(player) = self.players.get_mut(player_id) {
+            // Check if reconnect is within timeout
+            if let ConnectionState::Disconnected { since_tick } = player.connection_state {
+                let elapsed = current_tick.saturating_sub(since_tick);
+                if elapsed > self.config.reconnect_timeout_ticks {
+                    // Too late to reconnect
+                    return None;
+                }
+            }
+
+            player.connection_state = ConnectionState::Connected;
+            player.sender = sender;
+            Some(current_tick)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a player can reconnect (is disconnected but not timed out).
+    pub fn can_reconnect(&self, player_id: &PlayerId) -> bool {
+        let current_tick = self.game_state.as_ref().map(|s| s.tick).unwrap_or(0);
+
+        if let Some(player) = self.players.get(player_id) {
+            if let ConnectionState::Disconnected { since_tick } = player.connection_state {
+                let elapsed = current_tick.saturating_sub(since_tick);
+                return elapsed <= self.config.reconnect_timeout_ticks;
+            }
+        }
+        false
+    }
+
+    /// Check and eliminate players who have been disconnected too long.
+    /// Returns list of player IDs that were eliminated.
+    pub fn check_reconnect_timeouts(&mut self) -> Vec<PlayerId> {
+        let current_tick = self.game_state.as_ref().map(|s| s.tick).unwrap_or(0);
+        let timeout = self.config.reconnect_timeout_ticks;
+
+        let timed_out: Vec<PlayerId> = self.players.iter()
+            .filter_map(|(id, player)| {
+                if let ConnectionState::Disconnected { since_tick } = player.connection_state {
+                    let elapsed = current_tick.saturating_sub(since_tick);
+                    if elapsed > timeout {
+                        return Some(*id);
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Mark timed-out players as eliminated in game state
+        if let Some(ref mut state) = self.game_state {
+            for player_id in &timed_out {
+                if let Some(player) = state.players.get_mut(player_id) {
+                    player.alive = false;
+                }
+            }
+        }
+
+        timed_out
+    }
+
     /// Mark a player as ready.
     pub fn set_player_ready(&mut self, player_id: &PlayerId, ready: bool) -> bool {
         if let Some(player) = self.players.get_mut(player_id) {
@@ -194,7 +300,7 @@ impl MatchSession {
     /// Check if all players are ready.
     pub fn all_players_ready(&self) -> bool {
         self.players.len() >= self.config.min_players
-            && self.players.values().all(|p| p.ready && p.connected)
+            && self.players.values().all(|p| p.ready && p.is_connected())
     }
 
     /// Get player count.
@@ -307,9 +413,13 @@ impl MatchSession {
             return None;
         }
 
+        // Check for reconnect timeouts (eliminates players who have been disconnected too long)
+        let _timed_out = self.check_reconnect_timeouts();
+
         let state = self.game_state.as_mut()?;
 
         // Collect inputs for all players
+        // Disconnected players use neutral input (set in mark_disconnected)
         let mut inputs = BTreeMap::new();
         for (player_id, player) in &self.players {
             inputs.insert(*player_id, player.last_input);
@@ -474,7 +584,7 @@ impl MatchSession {
     /// Broadcast a message to all connected players.
     pub async fn broadcast(&self, message: ServerMessage) {
         for player in self.players.values() {
-            if player.connected {
+            if player.is_connected() {
                 let _ = player.sender.send(message.clone()).await;
             }
         }
@@ -796,5 +906,97 @@ mod tests {
         assert!(update.is_some());
         let update = update.unwrap();
         assert_eq!(update.players.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_marks_player() {
+        let mut session = create_test_session();
+        let player1 = PlayerId::new([1; 16]);
+        let (tx1, _) = mpsc::channel(10);
+
+        session.add_player(player1, tx1).unwrap();
+
+        // Player starts connected
+        assert!(session.players.get(&player1).unwrap().is_connected());
+
+        // Mark disconnected
+        assert!(session.mark_disconnected(&player1));
+        assert!(!session.players.get(&player1).unwrap().is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_restores_player() {
+        let mut session = create_test_session();
+        let player1 = PlayerId::new([1; 16]);
+        let player2 = PlayerId::new([2; 16]);
+        let (tx1, _) = mpsc::channel(10);
+        let (tx2, _) = mpsc::channel(10);
+
+        session.add_player(player1, tx1).unwrap();
+        session.add_player(player2, tx2).unwrap();
+        session.set_player_ready(&player1, true);
+        session.set_player_ready(&player2, true);
+        session.start_match().unwrap();
+        session.begin_playing();
+
+        // Mark disconnected
+        session.mark_disconnected(&player1);
+        assert!(!session.players.get(&player1).unwrap().is_connected());
+
+        // Reconnect
+        let (new_tx, _) = mpsc::channel(10);
+        let result = session.reconnect_player(&player1, new_tx);
+        assert!(result.is_some());
+        assert!(session.players.get(&player1).unwrap().is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_can_check() {
+        let mut session = create_test_session();
+        let player1 = PlayerId::new([1; 16]);
+        let player2 = PlayerId::new([2; 16]);
+        let (tx1, _) = mpsc::channel(10);
+        let (tx2, _) = mpsc::channel(10);
+
+        session.add_player(player1, tx1).unwrap();
+        session.add_player(player2, tx2).unwrap();
+        session.set_player_ready(&player1, true);
+        session.set_player_ready(&player2, true);
+        session.start_match().unwrap();
+        session.begin_playing();
+
+        // Connected player cannot reconnect (already connected)
+        assert!(!session.can_reconnect(&player1));
+
+        // Disconnected player can reconnect
+        session.mark_disconnected(&player1);
+        assert!(session.can_reconnect(&player1));
+    }
+
+    #[tokio::test]
+    async fn test_idle_input_for_disconnected() {
+        let mut session = create_test_session();
+        let player1 = PlayerId::new([1; 16]);
+        let player2 = PlayerId::new([2; 16]);
+        let (tx1, _) = mpsc::channel(10);
+        let (tx2, _) = mpsc::channel(10);
+
+        session.add_player(player1, tx1).unwrap();
+        session.add_player(player2, tx2).unwrap();
+        session.set_player_ready(&player1, true);
+        session.set_player_ready(&player2, true);
+        session.start_match().unwrap();
+        session.begin_playing();
+
+        // Give player1 some input
+        let input = InputFrame::with_movement(50, 50);
+        session.process_input(&player1, 1, input).unwrap();
+
+        // Now disconnect - input should be reset to neutral (-128 = no input)
+        session.mark_disconnected(&player1);
+        let player = session.players.get(&player1).unwrap();
+        // InputFrame::new() uses NO_INPUT (-128) for neutral joystick state
+        assert_eq!(player.last_input.move_x, InputFrame::NO_INPUT);
+        assert_eq!(player.last_input.move_y, InputFrame::NO_INPUT);
     }
 }

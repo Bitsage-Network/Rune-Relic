@@ -428,6 +428,10 @@ pub enum ErrorCode {
     AuthFailed,
     /// Not authenticated.
     NotAuthenticated,
+    /// JWT token has expired.
+    TokenExpired,
+    /// Invalid JWT token (signature, format, claims).
+    InvalidToken,
     /// Invalid input.
     InvalidInput,
     /// Match not found.
