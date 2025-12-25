@@ -24,6 +24,7 @@ use crate::game::events::GameEvent;
 ///
 /// Implements Ord for deterministic BTreeMap ordering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct PlayerId(pub [u8; 16]);
 
 impl PlayerId {
@@ -50,11 +51,6 @@ impl PlayerId {
     }
 }
 
-impl Default for PlayerId {
-    fn default() -> Self {
-        Self([0u8; 16])
-    }
-}
 
 // =============================================================================
 // PLAYER FORM (Evolution Tier)
@@ -63,8 +59,10 @@ impl Default for PlayerId {
 /// Player evolution form (Tier 1-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum Form {
     /// Tier 1: Spark - Smallest, fastest
+    #[default]
     Spark = 0,
     /// Tier 2: Glyph
     Glyph = 1,
@@ -119,11 +117,6 @@ impl Form {
     }
 }
 
-impl Default for Form {
-    fn default() -> Self {
-        Form::Spark
-    }
-}
 
 // =============================================================================
 // PLAYER STATE
@@ -315,7 +308,7 @@ impl PlayerState {
     /// Check if player has a specific shrine buff active.
     pub fn has_shrine_buff(&self, buff_type: ShrineType) -> bool {
         for (i, st) in self.shrine_buffs.iter().enumerate() {
-            if *st == buff_type && self.shrine_buff_ticks.get(i).map_or(false, |t| *t > 0) {
+            if *st == buff_type && self.shrine_buff_ticks.get(i).is_some_and(|t| *t > 0) {
                 return true;
             }
         }
@@ -347,7 +340,7 @@ impl PlayerState {
         // Remove expired buffs
         let mut i = 0;
         while i < self.shrine_buffs.len() {
-            if self.shrine_buff_ticks.get(i).map_or(true, |t| *t == 0) {
+            if self.shrine_buff_ticks.get(i).is_none_or(|t| *t == 0) {
                 self.shrine_buffs.swap_remove(i);
                 self.shrine_buff_ticks.swap_remove(i);
             } else {
@@ -548,8 +541,10 @@ pub struct ActiveAbilityEffect {
 
 /// Current phase of the match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum MatchPhase {
     /// Waiting for players
+    #[default]
     Waiting,
     /// Countdown before start
     Countdown { ticks_remaining: u32 },
@@ -559,11 +554,6 @@ pub enum MatchPhase {
     Ended,
 }
 
-impl Default for MatchPhase {
-    fn default() -> Self {
-        MatchPhase::Waiting
-    }
-}
 
 // =============================================================================
 // MATCH STATE
@@ -740,7 +730,7 @@ impl MatchState {
     pub fn compute_hash(&self) -> StateHash {
         compute_state_hash(self.tick, self.rng_seed, |hasher| {
             // Hash all players in sorted order (BTreeMap guarantees this)
-            for (_player_id, player) in &self.players {
+            for player in self.players.values() {
                 player.hash_into(hasher);
             }
 

@@ -47,6 +47,7 @@ pub fn spawn_shrines(state: &mut MatchState) {
 }
 
 /// Shrine action to apply after processing.
+#[allow(dead_code)]
 enum ShrineAction {
     StartChannel { shrine_id: u8, player_id: PlayerId },
     ContinueChannel { shrine_id: u8, progress: Fixed },

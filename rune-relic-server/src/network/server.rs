@@ -15,14 +15,67 @@ use futures_util::{SinkExt, StreamExt};
 use tracing::{info, warn, error, debug, instrument};
 
 use crate::game::state::PlayerId;
+use crate::game::events::{GameEvent, GameEventData};
 use crate::network::protocol::{
     ClientMessage, ServerMessage, AuthRequest, AuthResult, MatchmakingRequest,
     MatchmakingResponse, MatchmakingStatus, GameInput, MatchFoundInfo,
-    ErrorCode, MatchMode,
+    MatchStartInfo, InitialPlayerInfo, MatchEvent, ErrorCode, MatchMode,
 };
 use crate::network::session::{
-    SessionId, SessionConfig, SessionManager, SessionError,
+    SessionId, SessionState, SessionConfig, SessionManager, SessionError, MatchSession,
 };
+
+/// Convert a game event to a match event for client broadcasting.
+fn convert_game_event_to_match_event(event: &GameEvent) -> MatchEvent {
+    match &event.data {
+        GameEventData::PlayerEliminated { victim_id, killer_id, placement } => {
+            MatchEvent::PlayerEliminated {
+                tick: event.tick,
+                victim_id: *victim_id.as_bytes(),
+                killer_id: killer_id.map(|id| *id.as_bytes()),
+                victim_form: *placement, // Using placement as form for now
+            }
+        }
+        GameEventData::RuneCollected { player_id, rune_id, rune_type, points, .. } => {
+            MatchEvent::RuneCollected {
+                tick: event.tick,
+                player_id: *player_id.as_bytes(),
+                rune_id: *rune_id,
+                rune_type: *rune_type as u8,
+                points: *points,
+            }
+        }
+        GameEventData::FormEvolved { player_id, old_form, new_form } => {
+            MatchEvent::PlayerEvolved {
+                tick: event.tick,
+                player_id: *player_id.as_bytes(),
+                old_form: *old_form as u8,
+                new_form: *new_form as u8,
+            }
+        }
+        GameEventData::ShrineActivated { player_id, shrine_id } => {
+            MatchEvent::ShrineCaptured {
+                tick: event.tick,
+                player_id: *player_id.as_bytes(),
+                shrine_id: *shrine_id as u32,
+                shrine_type: 0, // Generic shrine
+            }
+        }
+        GameEventData::AbilityUsed { player_id, ability_type } => {
+            MatchEvent::AbilityUsed {
+                tick: event.tick,
+                player_id: *player_id.as_bytes(),
+                ability_type: *ability_type,
+            }
+        }
+        // Events not sent to clients (internal)
+        GameEventData::ShrineChannelStarted { .. } => MatchEvent::MatchStarted,
+        GameEventData::ShrineChannelInterrupted { .. } => MatchEvent::MatchStarted,
+        GameEventData::PhaseChanged { .. } => MatchEvent::MatchStarted,
+        GameEventData::RuneSpawned { .. } => MatchEvent::MatchStarted,
+        GameEventData::MatchEnded { .. } => MatchEvent::MatchStarted,
+    }
+}
 
 /// Server configuration.
 #[derive(Debug, Clone)]
@@ -87,10 +140,12 @@ struct ConnectedClient {
     /// Is authenticated.
     authenticated: bool,
     /// Connection time.
+    #[allow(dead_code)]
     connected_at: Instant,
     /// Last activity.
     last_activity: Instant,
-    /// Message sender.
+    /// Message sender (for direct messaging to client).
+    #[allow(dead_code)]
     sender: mpsc::Sender<ServerMessage>,
 }
 
@@ -291,7 +346,7 @@ impl GameServer {
                                     ).await;
                                 }
                             }
-                            Some(Ok(Message::Ping(data))) => {
+                            Some(Ok(Message::Ping(_))) => {
                                 let _ = msg_tx.send(ServerMessage::Pong {
                                     timestamp: 0,
                                     server_time: std::time::SystemTime::now()
@@ -369,10 +424,10 @@ impl GameServer {
                 Self::handle_cancel_matchmaking(addr, clients, matchmaking_queue, sender).await;
             }
             ClientMessage::Input(input) => {
-                Self::handle_input(addr, input, clients, sessions).await;
+                Self::handle_input(addr, input, clients, sessions, sender).await;
             }
             ClientMessage::Ready => {
-                Self::handle_ready(addr, clients, sessions, sender).await;
+                Self::handle_ready(addr, clients, sessions, config, sender).await;
             }
             ClientMessage::Ping { timestamp } => {
                 let _ = sender.send(ServerMessage::Pong {
@@ -511,36 +566,6 @@ impl GameServer {
         input: GameInput,
         clients: &Arc<RwLock<BTreeMap<SocketAddr, ConnectedClient>>>,
         sessions: &Arc<SessionManager>,
-    ) {
-        let (player_id, session_id) = {
-            let clients = clients.read().await;
-            match clients.get(&addr) {
-                Some(c) => (c.player_id, c.session_id),
-                None => return,
-            }
-        };
-
-        let player_id = match player_id {
-            Some(id) => id,
-            None => return,
-        };
-
-        let session_id = match session_id {
-            Some(id) => id,
-            None => return,
-        };
-
-        if let Some(session) = sessions.get_session(&session_id).await {
-            let mut session = session.write().await;
-            let _ = session.process_input(&player_id, input.tick, input.to_input_frame());
-        }
-    }
-
-    /// Handle player ready.
-    async fn handle_ready(
-        addr: SocketAddr,
-        clients: &Arc<RwLock<BTreeMap<SocketAddr, ConnectedClient>>>,
-        sessions: &Arc<SessionManager>,
         sender: &mpsc::Sender<ServerMessage>,
     ) {
         let (player_id, session_id) = {
@@ -562,11 +587,133 @@ impl GameServer {
         };
 
         if let Some(session) = sessions.get_session(&session_id).await {
-            let mut session = session.write().await;
-            session.set_player_ready(&player_id, true);
+            let (process_result, server_tick) = {
+                let mut session_guard = session.write().await;
+                let result = session_guard.process_input(&player_id, input.tick, input.to_input_frame());
+                let tick = session_guard.current_tick();
+                (result, tick)
+            };
+
+            // Send input acknowledgment
+            if process_result.is_ok() {
+                let _ = sender.send(ServerMessage::InputAck {
+                    tick: input.tick,
+                    server_tick,
+                }).await;
+            }
         }
+    }
+
+    /// Handle player ready.
+    async fn handle_ready(
+        addr: SocketAddr,
+        clients: &Arc<RwLock<BTreeMap<SocketAddr, ConnectedClient>>>,
+        sessions: &Arc<SessionManager>,
+        config: &ServerConfig,
+        sender: &mpsc::Sender<ServerMessage>,
+    ) {
+        let (player_id, session_id) = {
+            let clients = clients.read().await;
+            match clients.get(&addr) {
+                Some(c) => (c.player_id, c.session_id),
+                None => return,
+            }
+        };
+
+        let player_id = match player_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let session_id = match session_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let should_start = if let Some(session) = sessions.get_session(&session_id).await {
+            let mut session_guard = session.write().await;
+            session_guard.set_player_ready(&player_id, true);
+
+            // Check if all players are ready and session is in Lobby state
+            session_guard.all_players_ready() && session_guard.get_state() == SessionState::Lobby
+        } else {
+            false
+        };
 
         debug!("Player {:?} marked ready", &player_id.as_bytes()[..4]);
+
+        // If all players ready, start the match
+        if should_start {
+            if let Some(session) = sessions.get_session(&session_id).await {
+                // Generate a block hash for seed derivation (in production, use real block hash)
+                let block_hash: [u8; 32] = {
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let mut hash = [0u8; 32];
+                    let nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    for (i, byte) in nanos.to_le_bytes().iter().enumerate() {
+                        if i < 32 {
+                            hash[i] = *byte;
+                        }
+                    }
+                    hash
+                };
+
+                // Start the match
+                let start_result = {
+                    let mut session_guard = session.write().await;
+                    session_guard.set_block_hash(block_hash);
+                    session_guard.start_match()
+                };
+
+                match start_result {
+                    Ok(start_data) => {
+                        // Build MatchStartInfo
+                        let match_start = MatchStartInfo {
+                            match_id: start_data.match_id,
+                            rng_seed: start_data.rng_seed,
+                            start_tick: 0,
+                            players: start_data.players.iter().map(|(id, pos, color)| {
+                                InitialPlayerInfo {
+                                    player_id: *id,
+                                    position: *pos,
+                                    color_index: *color,
+                                }
+                            }).collect(),
+                            config_hash: [0; 32],
+                            block_hash: start_data.block_hash,
+                        };
+
+                        // Broadcast match start to all players
+                        {
+                            let session_guard = session.read().await;
+                            session_guard.broadcast(ServerMessage::MatchStart(match_start)).await;
+                        }
+
+                        info!("Match {:?} starting with {} players",
+                            &session_id[..4], start_data.players.len());
+
+                        // Spawn the game loop
+                        let session_clone = session.clone();
+                        let sessions_clone = sessions.clone();
+                        let tick_rate = config.tick_rate;
+
+                        tokio::spawn(async move {
+                            Self::run_session_game_loop(session_clone, sessions_clone, tick_rate).await;
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to start match: {:?}", e);
+                        let _ = sender.send(ServerMessage::Error(crate::network::protocol::ServerError {
+                            code: ErrorCode::InternalError,
+                            message: format!("Failed to start match: {:?}", e),
+                        })).await;
+                    }
+                }
+            }
+        }
     }
 
     /// Handle player leave.
@@ -608,6 +755,109 @@ impl GameServer {
                 client.session_id = None;
             }
         }
+    }
+
+    /// Run the game loop for a session.
+    /// Handles countdown, tick execution at 60Hz, state broadcasting, and match end.
+    async fn run_session_game_loop(
+        session: Arc<RwLock<MatchSession>>,
+        sessions: Arc<SessionManager>,
+        tick_rate: u32,
+    ) {
+        let session_id = session.read().await.id;
+        let countdown_duration = session.read().await.config.countdown_duration;
+
+        // Phase 1: Countdown
+        let countdown_secs = countdown_duration.as_secs() as u32;
+        for remaining in (1..=countdown_secs).rev() {
+            // Broadcast countdown event
+            {
+                let s = session.read().await;
+                s.broadcast(ServerMessage::Event(MatchEvent::Countdown { seconds: remaining })).await;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        // Transition to playing
+        {
+            let mut s = session.write().await;
+            s.begin_playing();
+            info!("Match {:?} started playing", &session_id[..4]);
+        }
+
+        // Broadcast match start (game is now running)
+        {
+            let s = session.read().await;
+            s.broadcast(ServerMessage::Event(MatchEvent::MatchStarted)).await;
+        }
+
+        // Phase 2: Game tick loop at 60Hz
+        let tick_duration = Duration::from_micros(1_000_000 / tick_rate as u64);
+        let mut tick_interval = interval(tick_duration);
+        tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tick_interval.tick().await;
+
+            let (match_ended, state_update, events) = {
+                let mut s = session.write().await;
+
+                // Check if session is still in playing state
+                if s.get_state() != SessionState::Playing {
+                    break;
+                }
+
+                // Run the game tick
+                let tick_result = match s.run_tick() {
+                    Some(result) => result,
+                    None => break,
+                };
+
+                let match_ended = tick_result.match_ended;
+                let events = tick_result.events.clone();
+
+                // Generate state update
+                let state_update = s.generate_state_update();
+
+                (match_ended, state_update, events)
+            };
+
+            // Broadcast events
+            {
+                let s = session.read().await;
+                for event in events {
+                    let match_event = convert_game_event_to_match_event(&event);
+                    s.broadcast(ServerMessage::Event(match_event)).await;
+                }
+            }
+
+            // Broadcast state update (every tick or every N ticks for bandwidth)
+            if let Some(update) = state_update {
+                let s = session.read().await;
+                s.broadcast(ServerMessage::State(update)).await;
+            }
+
+            // Check if match ended
+            if match_ended {
+                break;
+            }
+        }
+
+        // Phase 3: Match end
+        let end_info = {
+            let mut s = session.write().await;
+            s.finalize()
+        };
+
+        if let Some(end_info) = end_info {
+            let s = session.read().await;
+            s.broadcast(ServerMessage::MatchEnd(end_info)).await;
+            info!("Match {:?} ended", &session_id[..4]);
+        }
+
+        // Cleanup session after a delay
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        sessions.remove_session(&session_id).await;
     }
 
     /// Run matchmaking loop.

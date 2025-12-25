@@ -152,14 +152,14 @@ impl MerkleTree {
 
         // Walk up the tree, collecting sibling hashes
         for level in &self.levels[..self.levels.len().saturating_sub(1)] {
-            let sibling_index = if current_index % 2 == 0 {
+            let sibling_index = if current_index.is_multiple_of(2) {
                 current_index + 1
             } else {
                 current_index - 1
             };
 
             if sibling_index < level.len() {
-                let is_right = current_index % 2 == 0;
+                let is_right = current_index.is_multiple_of(2);
                 siblings.push((level[sibling_index], is_right));
             }
 

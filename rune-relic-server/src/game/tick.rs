@@ -24,6 +24,7 @@ use crate::game::events::GameEvent;
 
 /// Result of a tick.
 #[derive(Debug)]
+#[derive(Default)]
 pub struct TickResult {
     /// Events generated this tick
     pub events: Vec<GameEvent>,
@@ -33,15 +34,6 @@ pub struct TickResult {
     pub winner: Option<PlayerId>,
 }
 
-impl Default for TickResult {
-    fn default() -> Self {
-        Self {
-            events: Vec::new(),
-            match_ended: false,
-            winner: None,
-        }
-    }
-}
 
 /// Configuration for match simulation.
 pub struct MatchConfig {
@@ -296,7 +288,7 @@ fn update_arena_shrink(state: &mut MatchState, config: &MatchConfig) {
 }
 
 /// Process player-vs-player collisions.
-fn process_player_collisions(state: &mut MatchState, result: &mut TickResult) {
+fn process_player_collisions(state: &mut MatchState, _result: &mut TickResult) {
     let collisions = check_all_player_collisions(state);
 
     for collision in collisions {
@@ -318,7 +310,7 @@ fn process_player_collisions(state: &mut MatchState, result: &mut TickResult) {
 }
 
 /// Process player-vs-rune collisions.
-fn process_rune_collisions(state: &mut MatchState, result: &mut TickResult) {
+fn process_rune_collisions(state: &mut MatchState, _result: &mut TickResult) {
     let collisions = check_all_rune_collisions(state);
 
     for collision in collisions {
@@ -417,7 +409,6 @@ fn check_end_conditions(state: &mut MatchState, result: &mut TickResult) {
     // End if only 1 (or 0) players alive
     if state.alive_count <= 1 {
         end_match(state, result);
-        return;
     }
 }
 

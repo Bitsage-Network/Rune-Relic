@@ -18,6 +18,7 @@ pub const PUBLIC_INPUT_ELEMENT_COUNT: usize = 66;
 /// This structure is what goes on-chain or to the verifier.
 /// Kept small via Merkle commitments for variable-size data.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub struct ProofPublicInputs {
     /// Match ID (encoded as 4 M31 elements).
     pub match_id: [M31; 4],
@@ -53,23 +54,6 @@ pub struct ProofPublicInputs {
     pub events_root: [M31; 8],
 }
 
-impl Default for ProofPublicInputs {
-    fn default() -> Self {
-        Self {
-            match_id: [0; 4],
-            block_hash: [0; 8],
-            player_count: 0,
-            duration_ticks: 0,
-            winner_id: [0; 4],
-            placements_root: [0; 8],
-            inputs_root: [0; 8],
-            initial_state_hash: [0; 8],
-            final_state_hash: [0; 8],
-            checkpoints_root: [0; 8],
-            events_root: [0; 8],
-        }
-    }
-}
 
 impl ProofPublicInputs {
     /// Generate public inputs from a transcript.
@@ -231,14 +215,14 @@ impl ProofPublicInputs {
         let mut idx = 0;
 
         let mut match_id = [0u32; 4];
-        for i in 0..4 {
-            match_id[i] = arr[idx];
+        for slot in &mut match_id {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut block_hash = [0u32; 8];
-        for i in 0..8 {
-            block_hash[i] = arr[idx];
+        for slot in &mut block_hash {
+            *slot = arr[idx];
             idx += 1;
         }
 
@@ -249,44 +233,44 @@ impl ProofPublicInputs {
         idx += 1;
 
         let mut winner_id = [0u32; 4];
-        for i in 0..4 {
-            winner_id[i] = arr[idx];
+        for slot in &mut winner_id {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut placements_root = [0u32; 8];
-        for i in 0..8 {
-            placements_root[i] = arr[idx];
+        for slot in &mut placements_root {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut inputs_root = [0u32; 8];
-        for i in 0..8 {
-            inputs_root[i] = arr[idx];
+        for slot in &mut inputs_root {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut initial_state_hash = [0u32; 8];
-        for i in 0..8 {
-            initial_state_hash[i] = arr[idx];
+        for slot in &mut initial_state_hash {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut final_state_hash = [0u32; 8];
-        for i in 0..8 {
-            final_state_hash[i] = arr[idx];
+        for slot in &mut final_state_hash {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut checkpoints_root = [0u32; 8];
-        for i in 0..8 {
-            checkpoints_root[i] = arr[idx];
+        for slot in &mut checkpoints_root {
+            *slot = arr[idx];
             idx += 1;
         }
 
         let mut events_root = [0u32; 8];
-        for i in 0..8 {
-            events_root[i] = arr[idx];
+        for slot in &mut events_root {
+            *slot = arr[idx];
             idx += 1;
         }
 

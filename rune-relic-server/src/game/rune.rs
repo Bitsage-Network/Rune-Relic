@@ -33,7 +33,7 @@ pub fn maybe_spawn_runes(state: &mut MatchState, config: &RuneSpawnConfig) {
     }
 
     // Check spawn interval
-    if state.tick % config.spawn_interval != 0 {
+    if !state.tick.is_multiple_of(config.spawn_interval) {
         return;
     }
 

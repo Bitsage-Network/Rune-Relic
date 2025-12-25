@@ -53,8 +53,9 @@ impl FixedVec2 {
         }
     }
 
-    /// Add another vector.
+    /// Add another vector (wrapping arithmetic for determinism).
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, other: Self) -> Self {
         Self {
             x: self.x.wrapping_add(other.x),
@@ -62,8 +63,9 @@ impl FixedVec2 {
         }
     }
 
-    /// Subtract another vector.
+    /// Subtract another vector (wrapping arithmetic for determinism).
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(self, other: Self) -> Self {
         Self {
             x: self.x.wrapping_sub(other.x),

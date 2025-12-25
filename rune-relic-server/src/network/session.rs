@@ -16,6 +16,7 @@ use crate::proof::transcript::{MatchTranscript, MatchMetadata, MatchResult};
 use crate::network::protocol::{
     ServerMessage, GameStateUpdate, PlayerStateUpdate, PlayerBuffs,
     MatchEvent, MatchEndInfo, PlayerPlacement, MatchMode,
+    RuneUpdate, ShrineUpdate,
 };
 
 /// Unique session identifier.
@@ -107,8 +108,10 @@ pub struct MatchSession {
     /// Block hash for seed derivation.
     block_hash: [u8; 32],
     /// When session was created.
+    #[allow(dead_code)]
     created_at: Instant,
     /// When match started (if started).
+    #[allow(dead_code)]
     started_at: Option<Instant>,
     /// Event broadcast channel.
     event_tx: broadcast::Sender<MatchEvent>,
@@ -367,12 +370,34 @@ impl MatchSession {
             })
             .collect();
 
+        // Collect active (uncollected) runes
+        let runes: Vec<RuneUpdate> = state.runes.iter()
+            .filter(|(_, r)| !r.collected)
+            .map(|(_, r)| RuneUpdate {
+                id: r.id,
+                rune_type: r.rune_type as u8,
+                position: [r.position.x, r.position.y],
+                collected: r.collected,
+            })
+            .collect();
+
+        // Collect shrine states
+        let shrines: Vec<ShrineUpdate> = state.shrines.iter()
+            .map(|s| ShrineUpdate {
+                id: s.id as u32,
+                shrine_type: s.shrine_type as u8,
+                position: [s.position.x, s.position.y],
+                active: s.active,
+                controller: s.channeling_player.map(|p| *p.as_bytes()),
+            })
+            .collect();
+
         Some(GameStateUpdate {
             tick: state.tick,
             time_remaining: self.config.match_duration_ticks.saturating_sub(state.tick),
             players,
-            runes: None, // TODO: include rune updates
-            shrines: None, // TODO: include shrine updates
+            runes: if runes.is_empty() { None } else { Some(runes) },
+            shrines: if shrines.is_empty() { None } else { Some(shrines) },
             state_hash: state.compute_hash(),
         })
     }

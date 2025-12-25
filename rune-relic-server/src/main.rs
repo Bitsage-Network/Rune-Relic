@@ -41,7 +41,7 @@ fn demo_match() {
     let rng_seed = 12345u64;
     let mut state = MatchState::new(match_id, rng_seed);
 
-    info!("Match ID: {:?}", hex::encode(&match_id));
+    info!("Match ID: {:?}", hex::encode(match_id));
     info!("RNG Seed: {}", rng_seed);
 
     // Add players
@@ -92,7 +92,7 @@ fn demo_match() {
         // Log important events
         for event in &result.events {
             match &event.data {
-                rune_relic::game::events::GameEventData::PlayerEliminated { victim_id, killer_id, placement } => {
+                rune_relic::game::events::GameEventData::PlayerEliminated { victim_id, placement, .. } => {
                     info!("Player {} eliminated (placement: {})",
                           hex::encode(&victim_id.0[..4]), placement);
                 }
@@ -100,10 +100,8 @@ fn demo_match() {
                     info!("Player {} evolved to {:?}",
                           hex::encode(&player_id.0[..4]), new_form);
                 }
-                rune_relic::game::events::GameEventData::MatchEnded { winner_id, .. } => {
-                    if let Some(winner) = winner_id {
-                        info!("Match ended! Winner: {}", hex::encode(&winner.0[..4]));
-                    }
+                rune_relic::game::events::GameEventData::MatchEnded { winner_id: Some(winner), .. } => {
+                    info!("Match ended! Winner: {}", hex::encode(&winner.0[..4]));
                 }
                 _ => {}
             }
@@ -118,7 +116,7 @@ fn demo_match() {
     // Print final results
     info!("=== Match Results ===");
     let hash = state.compute_hash();
-    info!("Final State Hash: {}", hex::encode(&hash));
+    info!("Final State Hash: {}", hex::encode(hash));
 
     let placements = state.get_placements();
     for (id, placement, score) in placements {
@@ -151,7 +149,7 @@ fn demo_match() {
     let (replay_final, _) = replay_match(replay_state, &replay_inputs, MATCH_DURATION_TICKS);
     let replay_hash = replay_final.compute_hash();
 
-    info!("Replay State Hash: {}", hex::encode(&replay_hash));
+    info!("Replay State Hash: {}", hex::encode(replay_hash));
 
     if hash == replay_hash {
         info!("DETERMINISM VERIFIED: Hashes match!");

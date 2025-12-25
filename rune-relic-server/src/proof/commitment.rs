@@ -74,21 +74,21 @@ impl MatchCommitment {
 fn compute_commitment_hash(preimage: &CommitmentPreimage) -> StateHash {
     let mut hasher = Sha256::new();
     hasher.update(COMMITMENT_DOMAIN);
-    hasher.update(&preimage.match_id);
+    hasher.update(preimage.match_id);
 
     // Hash sorted player IDs
     for pid in &preimage.player_ids {
         hasher.update(pid);
     }
 
-    hasher.update(&preimage.config_hash);
+    hasher.update(preimage.config_hash);
 
     // Hash player nonces
     for nonce in &preimage.player_nonces {
         hasher.update(nonce);
     }
 
-    hasher.update(&preimage.server_nonce);
+    hasher.update(preimage.server_nonce);
 
     hasher.finalize().into()
 }

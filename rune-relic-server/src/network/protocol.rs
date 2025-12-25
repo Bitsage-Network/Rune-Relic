@@ -371,9 +371,11 @@ pub enum MatchEvent {
 
     /// Countdown milestone.
     Countdown {
-        tick: u32,
-        seconds_remaining: u32,
+        seconds: u32,
     },
+
+    /// Match has started (game is now running).
+    MatchStarted,
 }
 
 /// Match end information.
