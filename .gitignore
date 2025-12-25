@@ -1,0 +1,127 @@
+# =============================================================================
+# Rune Relic .gitignore
+# =============================================================================
+
+# =============================================================================
+# SENSITIVE DOCUMENTATION (Internal Design Specs - DO NOT COMMIT)
+# =============================================================================
+
+# Game design documents (secret sauce)
+gamedesigndoc.md
+deeperdesign.md
+game_research.md
+
+# Technical specifications
+technical_architecture.md
+technical_architecture_*.md
+deterministic_foundation.md
+
+# Economy & tokenomics (confidential)
+economy_design.md
+economy_design_*.md
+economy_integration_summary.md
+sage_token_utility_spec.md
+sage_parameters.json
+sage_worked_example_season.md
+
+# Progression & anti-cheat (competitive advantage)
+progression_system.md
+progression_system_*.md
+anti_cheat_spec.md
+anti_cheat_spec_*.md
+
+# BitSage integration details
+rune_relic_bitsage_integration.md
+
+# Internal specs directory
+specs/
+
+# =============================================================================
+# BUILD ARTIFACTS
+# =============================================================================
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Debug
+*.pdb
+
+# =============================================================================
+# IDE & EDITOR
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (RustRover, CLion)
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.dir-locals.el
+
+# =============================================================================
+# OS FILES
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# =============================================================================
+# LOCAL TOOLS & DEPENDENCIES
+# =============================================================================
+
+# ComfyUI (local image generation)
+ComfyUI/
+comfy-ui/
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# =============================================================================
+# LOGS & TEMP
+# =============================================================================
+
+*.log
+*.tmp
+*.temp
+.cache/
+
+# =============================================================================
+# SECRETS & CREDENTIALS
+# =============================================================================
+
+*.pem
+*.key
+.env
+.env.*
+secrets/
+credentials/

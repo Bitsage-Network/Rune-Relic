@@ -1,0 +1,75 @@
+[package]
+name = "rune-relic-server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rune Relic Team"]
+description = "Deterministic game server for Rune Relic - BitSage compatible"
+license = "MIT"
+repository = "https://github.com/your-org/rune-relic-server"
+
+[lib]
+name = "rune_relic"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rune-relic-server"
+path = "src/main.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# Hashing (for state hash, seed derivation)
+sha2 = "0.10"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Async runtime (for network layer)
+tokio = { version = "1.0", features = ["full"] }
+
+# WebSocket support
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hex encoding for logging
+hex = "0.4"
+
+[dev-dependencies]
+# Testing
+criterion = "0.5"
+proptest = "1.0"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
+
+# Uncomment when benchmark is created
+# [[bench]]
+# name = "determinism"
+# harness = false
+
+[features]
+default = []
+# Enable for BitSage proof generation
+bitsage = []
+# Enable detailed tracing for debugging
+debug-tracing = []
