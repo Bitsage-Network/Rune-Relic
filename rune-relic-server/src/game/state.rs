@@ -15,6 +15,7 @@ use crate::core::vec2::FixedVec2;
 use crate::core::rng::DeterministicRng;
 use crate::core::hash::{StateHash, StateHasher, compute_state_hash};
 use crate::game::events::GameEvent;
+use crate::game::map::ArcaneCircuitMap;
 
 // =============================================================================
 // PLAYER ID
@@ -131,6 +132,12 @@ pub struct PlayerState {
     /// Current position in arena
     pub position: FixedVec2,
 
+    /// Spawn zone ID assigned at match start
+    pub spawn_zone_id: Option<u8>,
+
+    /// Whether spawn zone shield is still active
+    pub spawn_zone_active: bool,
+
     /// Current velocity
     pub velocity: FixedVec2,
 
@@ -207,6 +214,8 @@ impl PlayerState {
         Self {
             id,
             position,
+            spawn_zone_id: None,
+            spawn_zone_active: false,
             velocity: FixedVec2::ZERO,
             form: Form::Spark,
             score: 0,
@@ -290,6 +299,11 @@ impl PlayerState {
         hasher.update_u8(self.form as u8);
         hasher.update_u32(self.score);
         hasher.update_bool(self.alive);
+        hasher.update_bool(self.spawn_zone_active);
+        hasher.update_bool(self.spawn_zone_id.is_some());
+        if let Some(zone_id) = self.spawn_zone_id {
+            hasher.update_u8(zone_id);
+        }
         hasher.update_u32(self.kills);
         // Health & buff system
         hasher.update_fixed(self.health);
@@ -580,6 +594,10 @@ pub struct MatchState {
     #[serde(skip)]
     pub rng: DeterministicRng,
 
+    /// Static map geometry
+    #[serde(skip)]
+    pub map: ArcaneCircuitMap,
+
     /// All players (BTreeMap for deterministic iteration)
     pub players: BTreeMap<PlayerId, PlayerState>,
 
@@ -618,6 +636,7 @@ impl MatchState {
             phase: MatchPhase::Waiting,
             rng_seed,
             rng: DeterministicRng::new(rng_seed),
+            map: ArcaneCircuitMap::new(),
             players: BTreeMap::new(),
             runes: BTreeMap::new(),
             shrines: Vec::new(),
@@ -632,10 +651,31 @@ impl MatchState {
 
     /// Add a player to the match.
     pub fn add_player(&mut self, id: PlayerId) {
-        let spawn_pos = self.rng.random_position();
-        let player = PlayerState::new(id, spawn_pos);
+        let player = PlayerState::new(id, FixedVec2::ZERO);
         self.players.insert(id, player);
         self.alive_count += 1;
+    }
+
+    /// Assign spawn positions to all players (deterministic).
+    pub fn assign_spawn_positions(&mut self) {
+        let mut zone_ids: Vec<u8> = self.map.spawn_zones().iter().map(|zone| zone.id).collect();
+        if zone_ids.is_empty() {
+            return;
+        }
+
+        self.rng.shuffle(&mut zone_ids);
+
+        for (idx, player) in self.players.values_mut().enumerate() {
+            let zone_id = zone_ids.get(idx % zone_ids.len()).copied().unwrap_or(0);
+            let zone = self.map.spawn_zone(zone_id).unwrap_or(&self.map.spawn_zones()[0]);
+            let radius = zone.radius.saturating_sub(player.radius()).max(0);
+            let position = self.rng.random_position_in_circle(zone.center, radius);
+
+            player.position = position;
+            player.velocity = FixedVec2::ZERO;
+            player.spawn_zone_id = Some(zone_id);
+            player.spawn_zone_active = true;
+        }
     }
 
     /// Get a player by ID.
@@ -667,9 +707,13 @@ impl MatchState {
     }
 
     /// Check if a position is within current arena bounds.
-    pub fn is_in_bounds(&self, pos: FixedVec2) -> bool {
-        let (hw, hh) = self.current_arena_bounds();
-        pos.x >= -hw && pos.x <= hw && pos.y >= -hh && pos.y <= hh
+    pub fn is_in_bounds(&self, player: &PlayerState) -> bool {
+        self.map.contains_player_position(
+            player.position,
+            player.radius(),
+            player.spawn_zone_id,
+            player.spawn_zone_active,
+        )
     }
 
     /// Eliminate a player.
@@ -842,6 +886,8 @@ mod tests {
             state1.add_player(id);
             state2.add_player(id);
         }
+        state1.assign_spawn_positions();
+        state2.assign_spawn_positions();
 
         // Positions should be identical (same RNG seed)
         for id in state1.players.keys() {

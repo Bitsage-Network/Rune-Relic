@@ -2,8 +2,6 @@
 
 <div align="center">
 
-![Rune Relic Banner](assets/screenshots/gameplay-banner.png)
-
 **A Cryptographically Verifiable Multiplayer Battle Arena**
 
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
@@ -20,11 +18,6 @@
 ## Overview
 
 **Rune Relic** is a fast-paced multiplayer survival arena where players compete to evolve, dominate shrines, and outlast opponents. Built with **100% deterministic game logic**, every match can be cryptographically verified on-chain using STWO proofs.
-
-<div align="center">
-<img src="assets/screenshots/gameplay-arena.png" alt="Gameplay" width="300"/>
-<img src="assets/screenshots/mode-select.png" alt="Mode Select" width="300"/>
-</div>
 
 ### Key Features
 
@@ -43,11 +36,6 @@
 | **Ritual Rush** | 12 | Classic survival battle - 90 seconds to ascend |
 | **Codex Duels** | 1v1 / 4 | Competitive stakes matches |
 | **Daily Trial** | 12 | Daily challenge with bonus rewards |
-
-<div align="center">
-<img src="assets/screenshots/victory-screen.png" alt="Victory" width="280"/>
-<img src="assets/screenshots/sudden-death.png" alt="Sudden Death" width="280"/>
-</div>
 
 ---
 
@@ -84,7 +72,7 @@ rune-relic/
 │   │
 │   └── Cargo.toml
 │
-└── assets/                # Game screenshots & media
+└── assets/                # Local screenshots & media (ignored)
 ```
 
 ### Determinism Guarantee

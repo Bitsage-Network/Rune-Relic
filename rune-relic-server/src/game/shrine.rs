@@ -29,19 +29,23 @@ impl Default for ShrineConfig {
 }
 
 /// Fixed shrine positions in arena (as Fixed values).
-/// Positions are at ~35 units from center in corners.
-const SHRINE_POSITIONS: [(Fixed, Fixed, ShrineType); 4] = [
-    (2293760, 2293760, ShrineType::Wisdom),    // 35.0, 35.0 - top-right
-    (-2293760, 2293760, ShrineType::Power),    // -35.0, 35.0 - top-left
-    (-2293760, -2293760, ShrineType::Speed),   // -35.0, -35.0 - bottom-left
-    (2293760, -2293760, ShrineType::Shield),   // 35.0, -35.0 - bottom-right
+/// Arcane Circuit layout with major hubs and minor junctions.
+const SHRINE_POSITIONS: [(FixedVec2, ShrineType); 9] = [
+    (FixedVec2::from_ints(0, 0), ShrineType::Wisdom),
+    (FixedVec2::from_ints(0, 90), ShrineType::Power),
+    (FixedVec2::from_ints(0, -90), ShrineType::Speed),
+    (FixedVec2::from_ints(140, 0), ShrineType::Shield),
+    (FixedVec2::from_ints(-140, 0), ShrineType::Wisdom),
+    (FixedVec2::from_ints(70, 45), ShrineType::Speed),
+    (FixedVec2::from_ints(-70, 45), ShrineType::Shield),
+    (FixedVec2::from_ints(70, -45), ShrineType::Power),
+    (FixedVec2::from_ints(-70, -45), ShrineType::Wisdom),
 ];
 
 /// Initialize shrines at fixed positions (called at match start).
 pub fn spawn_shrines(state: &mut MatchState) {
-    for (i, (x, y, shrine_type)) in SHRINE_POSITIONS.iter().enumerate() {
-        let position = FixedVec2::new(*x, *y);
-        let shrine = ShrineState::new(i as u8, position, *shrine_type);
+    for (i, (position, shrine_type)) in SHRINE_POSITIONS.iter().enumerate() {
+        let shrine = ShrineState::new(i as u8, *position, *shrine_type);
         state.shrines.push(shrine);
     }
 }

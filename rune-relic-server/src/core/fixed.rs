@@ -63,11 +63,11 @@ pub const JUMP_VELOCITY: Fixed = 786432;
 /// Gravity acceleration: 30.0 = 30 * 65536 = 1966080
 pub const GRAVITY: Fixed = 1966080;
 
-/// Arena half-width: 50.0 = 50 * 65536 = 3276800
-pub const ARENA_HALF_WIDTH: Fixed = 3276800;
+/// Arena half-width: 200.0 = 200 * 65536 = 13107200
+pub const ARENA_HALF_WIDTH: Fixed = 13107200;
 
-/// Arena half-height: 50.0 = 50 * 65536 = 3276800
-pub const ARENA_HALF_HEIGHT: Fixed = 3276800;
+/// Arena half-height: 200.0 = 200 * 65536 = 13107200
+pub const ARENA_HALF_HEIGHT: Fixed = 13107200;
 
 /// Form speeds by tier (indices 0-4 for Tiers 1-5)
 pub const FORM_SPEEDS: [Fixed; 5] = [
@@ -409,7 +409,7 @@ mod tests {
         // Verify constants are correct
         assert_eq!(TICK_DURATION, 1092); // round(65536/60)
         assert_eq!(BASE_MOVE_SPEED, 5 * FIXED_ONE);
-        assert_eq!(ARENA_HALF_WIDTH, 50 * FIXED_ONE);
+        assert_eq!(ARENA_HALF_WIDTH, 200 * FIXED_ONE);
         assert_eq!(FORM_SPEEDS[0], 6 * FIXED_ONE); // Tier 1
         assert_eq!(FORM_RADII[2], FIXED_ONE); // Tier 3 = 1.0
     }

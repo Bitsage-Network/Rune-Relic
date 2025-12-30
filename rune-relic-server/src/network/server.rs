@@ -46,6 +46,14 @@ fn convert_game_event_to_match_event(event: &GameEvent) -> MatchEvent {
                 points: *points,
             }
         }
+        GameEventData::RuneSpawned { rune_id, rune_type, position } => {
+            MatchEvent::RuneSpawned {
+                tick: event.tick,
+                rune_id: *rune_id,
+                rune_type: *rune_type as u8,
+                position: [position.x, position.y],
+            }
+        }
         GameEventData::FormEvolved { player_id, old_form, new_form } => {
             MatchEvent::PlayerEvolved {
                 tick: event.tick,
@@ -73,7 +81,6 @@ fn convert_game_event_to_match_event(event: &GameEvent) -> MatchEvent {
         GameEventData::ShrineChannelStarted { .. } => MatchEvent::MatchStarted,
         GameEventData::ShrineChannelInterrupted { .. } => MatchEvent::MatchStarted,
         GameEventData::PhaseChanged { .. } => MatchEvent::MatchStarted,
-        GameEventData::RuneSpawned { .. } => MatchEvent::MatchStarted,
         GameEventData::MatchEnded { .. } => MatchEvent::MatchStarted,
     }
 }
@@ -502,7 +509,19 @@ impl GameServer {
         } else {
             // Legacy mode: accept player_id from request (for development/testing)
             debug!("Auth not configured, using legacy player_id mode");
-            PlayerId::new(auth.player_id)
+            match auth.player_id_bytes() {
+                Some(bytes) => PlayerId::new(bytes),
+                None => {
+                    let _ = sender.send(ServerMessage::AuthResult(AuthResult {
+                        success: false,
+                        session_id: None,
+                        error: Some("Invalid player_id format".to_string()),
+                        server_version: config.version.clone(),
+                    })).await;
+                    warn!("Invalid player_id format from {}", addr);
+                    return;
+                }
+            }
         };
 
         // Update client state
@@ -959,8 +978,8 @@ impl GameServer {
                 .map(|(i, _)| i)
                 .collect();
 
-            // Create matches for casual (need 2-4 players)
-            if casual_indices.len() >= 2 {
+            // Create matches for casual (need 1-4 players for dev testing)
+            if casual_indices.len() >= 1 {
                 let match_size = casual_indices.len().min(4);
                 let matched_indices: Vec<usize> = casual_indices[..match_size].to_vec();
 
@@ -977,7 +996,7 @@ impl GameServer {
                 // Create session
                 let config = SessionConfig {
                     max_players: 4,
-                    min_players: 2,
+                    min_players: 1,  // Allow single-player for testing
                     mode: MatchMode::Casual,
                     generate_proof: false,
                     ..Default::default()

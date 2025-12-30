@@ -7,20 +7,32 @@ use crate::game::events::GameEvent;
 
 /// Configuration for rune spawning.
 pub struct RuneSpawnConfig {
+    /// Initial runes spawned when match begins
+    pub initial_spawn_count: u32,
     /// Minimum ticks between spawn waves
     pub spawn_interval: u32,
-    /// Base number of runes per wave
-    pub base_spawn_count: u32,
+    /// Number of runes per wave
+    pub spawn_count: u32,
     /// Maximum runes on field at once
     pub max_runes: u32,
+    /// Spawn weighting for hubs
+    pub weight_hubs: u32,
+    /// Spawn weighting for corridors
+    pub weight_corridors: u32,
+    /// Spawn weighting for spawn zones
+    pub weight_spawns: u32,
 }
 
 impl Default for RuneSpawnConfig {
     fn default() -> Self {
         Self {
+            initial_spawn_count: 6000,
             spawn_interval: 60, // Every second
-            base_spawn_count: 3,
-            max_runes: 50,
+            spawn_count: 25,
+            max_runes: 7000,
+            weight_hubs: 60,
+            weight_corridors: 30,
+            weight_spawns: 10,
         }
     }
 }
@@ -32,11 +44,24 @@ pub fn maybe_spawn_runes(state: &mut MatchState, config: &RuneSpawnConfig) {
         return;
     }
 
-    // Check spawn interval
-    if !state.tick.is_multiple_of(config.spawn_interval) {
-        return;
+    // Initial spawn on first tick
+    if state.tick == 1 && state.runes.is_empty() {
+        spawn_runes(state, config, config.initial_spawn_count, false, None);
     }
 
+    // Check spawn interval
+    if state.tick.is_multiple_of(config.spawn_interval) {
+        spawn_runes(state, config, config.spawn_count, true, Some(0));
+    }
+}
+
+fn spawn_runes(
+    state: &mut MatchState,
+    config: &RuneSpawnConfig,
+    count: u32,
+    emit_events: bool,
+    weight_spawns_override: Option<u32>,
+) {
     // Count uncollected runes
     let uncollected_count = state.runes.values().filter(|r| !r.collected).count();
     if uncollected_count >= config.max_runes as usize {
@@ -44,16 +69,29 @@ pub fn maybe_spawn_runes(state: &mut MatchState, config: &RuneSpawnConfig) {
     }
 
     // Determine spawn count
-    let spawn_count = config.base_spawn_count.min(
-        config.max_runes - uncollected_count as u32
-    );
+    let spawn_count = count.min(config.max_runes - uncollected_count as u32);
 
     // Spawn runes
-    for _ in 0..spawn_count {
-        let position = state.rng.random_position();
-        let rune_type = random_rune_type(&mut state.rng);
+    let weight_spawns = weight_spawns_override.unwrap_or(config.weight_spawns);
 
-        state.spawn_rune(position, rune_type);
+    for _ in 0..spawn_count {
+        let position = state.map.random_pellet_position(
+            &mut state.rng,
+            config.weight_hubs,
+            config.weight_corridors,
+            weight_spawns,
+        );
+        let rune_type = random_rune_type(&mut state.rng);
+        let rune_id = state.spawn_rune(position, rune_type);
+
+        if emit_events {
+            state.push_event(GameEvent::rune_spawned(
+                state.tick,
+                rune_id,
+                rune_type,
+                position,
+            ));
+        }
     }
 }
 

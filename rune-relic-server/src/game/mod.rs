@@ -16,6 +16,7 @@ pub mod input;
 pub mod state;
 pub mod tick;
 pub mod collision;
+pub mod map;
 pub mod rune;
 pub mod shrine;
 pub mod ability;

@@ -164,7 +164,7 @@ pub fn check_bounds_collision(state: &MatchState, player: &PlayerState) -> bool 
         return false;
     }
 
-    !state.is_in_bounds(player.position)
+    !state.is_in_bounds(player)
 }
 
 #[cfg(test)]

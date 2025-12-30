@@ -73,11 +73,11 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            max_players: 4,
+            max_players: 16,
             min_players: 2,
             ready_timeout: Duration::from_secs(30),
             countdown_duration: Duration::from_secs(3),
-            match_duration_ticks: 5400, // 90 seconds @ 60Hz
+            match_duration_ticks: 10800, // 180 seconds @ 60Hz
             mode: MatchMode::Casual,
             generate_proof: false,
             reconnect_timeout_ticks: 1800, // 30 seconds @ 60Hz
@@ -336,6 +336,7 @@ impl MatchSession {
         for player_id in self.players.keys() {
             game_state.add_player(*player_id);
         }
+        game_state.assign_spawn_positions();
 
         // Create transcript if generating proofs
         if self.config.generate_proof {
@@ -467,6 +468,8 @@ impl MatchSession {
                 form: p.form as u8,
                 score: p.score,
                 alive: p.alive,
+                spawn_zone_id: p.spawn_zone_id.map(|id| id as i32).unwrap_or(-1),
+                spawn_zone_active: p.spawn_zone_active,
                 radius: p.radius(),
                 ability_cooldown: p.ability_cooldown,
                 buffs: PlayerBuffs {
@@ -480,16 +483,20 @@ impl MatchSession {
             })
             .collect();
 
-        // Collect active (uncollected) runes
-        let runes: Vec<RuneUpdate> = state.runes.iter()
-            .filter(|(_, r)| !r.collected)
-            .map(|(_, r)| RuneUpdate {
-                id: r.id,
-                rune_type: r.rune_type as u8,
-                position: [r.position.x, r.position.y],
-                collected: r.collected,
-            })
-            .collect();
+        let include_runes = state.tick <= 3;
+        let runes: Vec<RuneUpdate> = if include_runes {
+            state.runes.iter()
+                .filter(|(_, r)| !r.collected)
+                .map(|(_, r)| RuneUpdate {
+                    id: r.id,
+                    rune_type: r.rune_type as u8,
+                    position: [r.position.x, r.position.y],
+                    collected: r.collected,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Collect shrine states
         let shrines: Vec<ShrineUpdate> = state.shrines.iter()
@@ -506,7 +513,7 @@ impl MatchSession {
             tick: state.tick,
             time_remaining: self.config.match_duration_ticks.saturating_sub(state.tick),
             players,
-            runes: if runes.is_empty() { None } else { Some(runes) },
+            runes: if include_runes && !runes.is_empty() { Some(runes) } else { None },
             shrines: if shrines.is_empty() { None } else { Some(shrines) },
             state_hash: state.compute_hash(),
         })

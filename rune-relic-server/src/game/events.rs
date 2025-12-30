@@ -175,6 +175,24 @@ impl GameEvent {
         )
     }
 
+    /// Create rune spawned event.
+    pub fn rune_spawned(
+        tick: u32,
+        rune_id: u32,
+        rune_type: RuneType,
+        position: FixedVec2,
+    ) -> Self {
+        Self::new(
+            tick,
+            EventPriority::Other,
+            GameEventData::RuneSpawned {
+                rune_id,
+                rune_type,
+                position,
+            },
+        )
+    }
+
     /// Create form evolved event.
     pub fn form_evolved(tick: u32, player_id: PlayerId, old_form: Form, new_form: Form) -> Self {
         Self::new(

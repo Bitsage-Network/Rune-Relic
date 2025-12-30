@@ -62,5 +62,5 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Simulation tick rate (Hz)
 pub const TICK_RATE: u32 = 60;
 
-/// Match duration in ticks (90 seconds * 60 Hz)
-pub const MATCH_DURATION_TICKS: u32 = 5400;
+/// Match duration in ticks (180 seconds * 60 Hz)
+pub const MATCH_DURATION_TICKS: u32 = 10800;

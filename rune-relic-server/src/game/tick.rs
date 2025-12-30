@@ -54,9 +54,9 @@ impl Default for MatchConfig {
         Self {
             rune_spawn: RuneSpawnConfig::default(),
             shrine: ShrineConfig::default(),
-            shrink_start_tick: 1800, // Start shrinking at 30 seconds
-            shrink_rate: 18,          // Slow shrink: ~0.0003 per tick
-            zone_damage_rate: 3276,   // ~0.05 per tick = ~3 per second
+            shrink_start_tick: u32::MAX, // Disable shrink for Arcane Circuit
+            shrink_rate: 0,
+            zone_damage_rate: 0,
         }
     }
 }
@@ -120,17 +120,17 @@ pub fn tick(
     // 2. Update physics
     update_physics(state);
 
-    // 3. Update arena shrink
+    // 3. Update arena shrink (disabled in Arcane Circuit config)
     update_arena_shrink(state, config);
 
-    // 4. Check player-vs-player collisions
+    // 4. Check wall collisions (instant elimination)
+    process_wall_collisions(state, &mut result);
+
+    // 5. Check player-vs-player collisions
     process_player_collisions(state, &mut result);
 
-    // 5. Check player-vs-rune collisions
+    // 6. Check player-vs-rune collisions
     process_rune_collisions(state, &mut result);
-
-    // 6. Check zone damage (players outside shrinking arena)
-    process_zone_damage(state, config, &mut result);
 
     // 7. Spawn new runes
     maybe_spawn_runes(state, &config.rune_spawn);
@@ -213,9 +213,6 @@ fn update_physics(state: &mut MatchState) {
     // Shrine speed buff multiplier (1.2x = 78643 in fixed point)
     const SHRINE_SPEED_MULT: Fixed = 78643;
 
-    // Get arena bounds before iteration
-    let (hw, hh) = state.current_arena_bounds();
-
     // BTreeMap values_mut iterates in sorted order
     for player in state.players.values_mut() {
         if !player.alive {
@@ -246,9 +243,15 @@ fn update_physics(state: &mut MatchState) {
         player.position.x = player.position.x.wrapping_add(dx);
         player.position.y = player.position.y.wrapping_add(dy);
 
-        // Clamp to arena bounds
-        player.position.x = player.position.x.max(-hw).min(hw);
-        player.position.y = player.position.y.max(-hh).min(hh);
+        if player.spawn_zone_active {
+            if let Some(zone_id) = player.spawn_zone_id {
+                if !state.map.spawn_zone_contains(zone_id, player.position, player.radius()) {
+                    player.spawn_zone_active = false;
+                }
+            } else {
+                player.spawn_zone_active = false;
+            }
+        }
 
         // Decay ability cooldown
         if player.ability_cooldown > 0 {
@@ -320,77 +323,25 @@ fn process_rune_collisions(state: &mut MatchState, _result: &mut TickResult) {
     }
 }
 
-/// Process zone damage for players outside bounds.
-/// Implements gradual damage instead of instant elimination.
-fn process_zone_damage(state: &mut MatchState, config: &MatchConfig, _result: &mut TickResult) {
-    let (hw, hh) = state.current_arena_bounds();
-
-    // Health regeneration rate when inside bounds
-    const REGEN_RATE: Fixed = 328; // ~0.005 per tick = ~0.3 per second
-
-    // Collect players to eliminate after damage
+/// Process wall collisions for players outside map bounds.
+fn process_wall_collisions(state: &mut MatchState, _result: &mut TickResult) {
     let mut to_eliminate: Vec<PlayerId> = Vec::new();
 
-    for (player_id, player) in state.players.iter_mut() {
+    for (player_id, player) in &state.players {
         if !player.alive {
             continue;
         }
 
-        // Check if outside bounds
-        let outside_x = player.position.x < -hw || player.position.x > hw;
-        let outside_y = player.position.y < -hh || player.position.y > hh;
-
-        if outside_x || outside_y {
-            // Calculate distance outside bounds for damage scaling
-            let dist_outside_x = if player.position.x < -hw {
-                (-hw).saturating_sub(player.position.x).abs()
-            } else if player.position.x > hw {
-                player.position.x.saturating_sub(hw).abs()
-            } else {
-                0
-            };
-
-            let dist_outside_y = if player.position.y < -hh {
-                (-hh).saturating_sub(player.position.y).abs()
-            } else if player.position.y > hh {
-                player.position.y.saturating_sub(hh).abs()
-            } else {
-                0
-            };
-
-            // Base damage + distance factor
-            let base_damage = config.zone_damage_rate;
-            let dist_factor = fixed_mul(
-                dist_outside_x.saturating_add(dist_outside_y),
-                655, // ~0.01 multiplier per unit distance
-            );
-            let damage = base_damage.saturating_add(dist_factor);
-
-            // Apply shield damage reduction (from rune or shrine buff)
-            let has_shield = player.shield_buff_ticks > 0
-                || player.has_shrine_buff(crate::game::state::ShrineType::Shield);
-            let shield_mult = if has_shield { 32768 } else { FIXED_ONE }; // 0.5x or 1.0x
-            let final_damage = fixed_mul(damage, shield_mult);
-
-            // Apply damage
-            player.health = player.health.saturating_sub(final_damage);
-
-            // Check for elimination
-            if player.health <= 0 {
-                to_eliminate.push(*player_id);
-            }
-        } else {
-            // Inside bounds - regenerate health slowly
-            player.health = player.health.saturating_add(REGEN_RATE).min(player.max_health);
+        if !state.is_in_bounds(player) {
+            to_eliminate.push(*player_id);
         }
     }
 
-    // Eliminate players with zero health
     for player_id in to_eliminate {
         let event = GameEvent::player_eliminated(
             state.tick,
             player_id,
-            None, // No killer - zone death
+            None, // No killer - wall death
             (state.players.len() as u8).saturating_sub(state.next_placement),
         );
         state.eliminate_player(&player_id, None);

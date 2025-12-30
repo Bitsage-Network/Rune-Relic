@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(inside.clamp_to_arena(), inside);
 
         // Outside bounds - clamped
-        let outside = FixedVec2::new(to_fixed(100.0), to_fixed(-100.0));
+        let outside = FixedVec2::new(to_fixed(250.0), to_fixed(-250.0));
         let clamped = outside.clamp_to_arena();
         assert_eq!(clamped.x, ARENA_HALF_WIDTH);
         assert_eq!(clamped.y, -ARENA_HALF_HEIGHT);

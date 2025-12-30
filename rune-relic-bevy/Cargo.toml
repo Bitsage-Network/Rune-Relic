@@ -1,0 +1,43 @@
+[package]
+name = "rune-relic-client"
+version = "0.1.0"
+edition = "2021"
+description = "Rune Relic game client built with Bevy"
+
+[dependencies]
+# Bevy game engine
+bevy = { version = "0.15", features = ["dynamic_linking"] }
+
+# Networking
+tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "macros"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+rand = "0.8"
+hex = "0.4"
+
+# Procedural generation
+noise = "0.9"
+
+# Async bridge for Bevy
+bevy-tokio-tasks = "0.15"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# Enable optimizations for release
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# For WASM builds
+[target.wasm32-unknown-unknown]
+runner = "wasm-server-runner"

@@ -44,12 +44,25 @@ pub enum ClientMessage {
 /// Authentication request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthRequest {
-    /// Player's unique identifier.
-    pub player_id: [u8; 16],
+    /// Player's unique identifier (hex string for JSON compatibility).
+    pub player_id: String,
     /// Authentication token (JWT or session token).
     pub token: String,
     /// Client version for compatibility check.
     pub client_version: String,
+}
+
+impl AuthRequest {
+    /// Parse player_id from hex string to bytes.
+    pub fn player_id_bytes(&self) -> Option<[u8; 16]> {
+        let bytes = hex::decode(&self.player_id).ok()?;
+        if bytes.len() != 16 {
+            return None;
+        }
+        let mut arr = [0u8; 16];
+        arr.copy_from_slice(&bytes);
+        Some(arr)
+    }
 }
 
 /// Matchmaking request.
@@ -269,6 +282,10 @@ pub struct PlayerStateUpdate {
     pub score: u32,
     /// Is player alive.
     pub alive: bool,
+    /// Spawn zone ID (-1 if none).
+    pub spawn_zone_id: i32,
+    /// Spawn zone shield active.
+    pub spawn_zone_active: bool,
     /// Player radius (Fixed as i32).
     pub radius: i32,
     /// Ability cooldown remaining.
@@ -329,6 +346,14 @@ pub enum MatchEvent {
         rune_id: u32,
         rune_type: u8,
         points: u32,
+    },
+
+    /// Rune spawned.
+    RuneSpawned {
+        tick: u32,
+        rune_id: u32,
+        rune_type: u8,
+        position: [i32; 2],
     },
 
     /// Player evolved to new form.
@@ -636,6 +661,12 @@ mod tests {
                 rune_id: 5,
                 rune_type: 0,
                 points: 10,
+            },
+            MatchEvent::RuneSpawned {
+                tick: 110,
+                rune_id: 6,
+                rune_type: 2,
+                position: [123, -456],
             },
             MatchEvent::PlayerEvolved {
                 tick: 200,
